@@ -2,6 +2,11 @@ import { app } from "../../scripts/app.js";
 import { BaseCollectorNode } from "./base_node_collector.js";
 import { NodeTypesString, stripRgthree } from "./constants.js";
 import { PassThroughFollowing, addConnectionLayoutSupport, getConnectedInputNodesAndFilterPassThroughs, getConnectedOutputNodesAndFilterPassThroughs, } from "./utils.js";
+const MODE_ALWAYS = 0;
+const MODE_MUTE = 2;
+const MODE_BYPASS = 4;
+const MODE_REPEATS = [MODE_MUTE, MODE_BYPASS];
+const MODE_NOTHING = -99;
 class NodeModeRepeater extends BaseCollectorNode {
     constructor(title) {
         super(title);
@@ -9,6 +14,7 @@ class NodeModeRepeater extends BaseCollectorNode {
         this.comfyClass = NodeTypesString.NODE_MODE_REPEATER;
         this.hasRelayInput = false;
         this.hasTogglerOutput = false;
+        this.properties["inverse_behavior"] = false;
         this.onConstructed();
     }
     onConstructed() {
@@ -96,11 +102,18 @@ class NodeModeRepeater extends BaseCollectorNode {
     onModeChange(from, to) {
         var _a, _b;
         super.onModeChange(from, to);
+        let newMode = to;
+        if (this.properties["inverse_behavior"]) {
+            if (newMode === MODE_MUTE)
+                newMode = MODE_ALWAYS;
+            else if (newMode === MODE_ALWAYS)
+                newMode = MODE_MUTE;
+        }
         const linkedNodes = getConnectedInputNodesAndFilterPassThroughs(this).filter((node) => node.type !== NodeTypesString.NODE_MODE_RELAY);
         if (linkedNodes.length) {
             for (const node of linkedNodes) {
                 if (node.type !== NodeTypesString.NODE_MODE_RELAY) {
-                    node.mode = to;
+                    node.mode = newMode;
                 }
             }
         }
@@ -110,7 +123,7 @@ class NodeModeRepeater extends BaseCollectorNode {
                 if ((_b = group._nodes) === null || _b === void 0 ? void 0 : _b.includes(this)) {
                     for (const node of group._nodes) {
                         if (node !== this) {
-                            node.mode = to;
+                            node.mode = newMode;
                         }
                     }
                 }
@@ -141,6 +154,10 @@ class NodeModeRepeater extends BaseCollectorNode {
 }
 NodeModeRepeater.type = NodeTypesString.NODE_MODE_REPEATER;
 NodeModeRepeater.title = NodeTypesString.NODE_MODE_REPEATER;
+NodeModeRepeater["@inverse_behavior"] = {
+    type: "boolean",
+    default: false,
+};
 app.registerExtension({
     name: "rgthree.NodeModeRepeater",
     registerCustomNodes() {

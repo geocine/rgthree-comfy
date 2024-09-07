@@ -36,6 +36,7 @@ class NodeModeRelay extends BaseCollectorNode {
         this.properties["on_muted_inputs"] = "MUTE";
         this.properties["on_bypassed_inputs"] = "BYPASS";
         this.properties["on_any_active_inputs"] = "ACTIVE";
+        this.properties["inverse_behavior"] = false;
         this.onConstructed();
     }
     onConstructed() {
@@ -135,7 +136,13 @@ class NodeModeRelay extends BaseCollectorNode {
         var _a, _b;
         if (mode != null) {
             const propertyVal = (_a = this.properties) === null || _a === void 0 ? void 0 : _a[MODE_TO_PROPERTY.get(mode) || ""];
-            const newMode = OPTION_TO_MODE.get(propertyVal);
+            let newMode = OPTION_TO_MODE.get(propertyVal);
+            if (this.properties["inverse_behavior"]) {
+                if (newMode === MODE_MUTE)
+                    newMode = MODE_ALWAYS;
+                else if (newMode === MODE_ALWAYS)
+                    newMode = MODE_MUTE;
+            }
             mode = (newMode !== null ? newMode : mode);
             if (mode !== null && mode !== MODE_NOTHING) {
                 if ((_b = this.outputs) === null || _b === void 0 ? void 0 : _b.length) {
@@ -198,6 +205,10 @@ NodeModeRelay["@on_bypassed_inputs"] = {
 NodeModeRelay["@on_any_active_inputs"] = {
     type: "combo",
     values: ["BYPASS", "ACTIVE", "MUTE", "NOTHING"],
+};
+NodeModeRelay["@inverse_behavior"] = {
+    type: "boolean",
+    default: false,
 };
 app.registerExtension({
     name: "rgthree.NodeModeRepeaterHelper",
