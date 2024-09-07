@@ -77,11 +77,17 @@ class NodeModeRelay extends BaseCollectorNode {
     values: ["BYPASS", "ACTIVE", "MUTE", "NOTHING"],
   };
 
+  static "@inverse_behavior" = {
+    type: "boolean",
+    default: false,
+  };
+
   constructor(title?: string) {
     super(title);
     this.properties["on_muted_inputs"] = "MUTE";
     this.properties["on_bypassed_inputs"] = "BYPASS";
     this.properties["on_any_active_inputs"] = "ACTIVE";
+    this.properties["inverse_behavior"] = false;
 
     this.onConstructed();
   }
@@ -214,8 +220,16 @@ class NodeModeRelay extends BaseCollectorNode {
   private dispatchModeToRepeater(mode?: LGraphEventMode | -99 | null) {
     if (mode != null) {
       const propertyVal = this.properties?.[MODE_TO_PROPERTY.get(mode) || ""];
-      const newMode = OPTION_TO_MODE.get(propertyVal as string);
-      mode = (newMode !== null ? newMode : mode) as LGraphEventMode | -99;
+      let newMode = (OPTION_TO_MODE.get(propertyVal as string) ?? mode) as LGraphEventMode | -99;
+
+      // Apply inverse behavior if enabled
+      if (this.properties["inverse_behavior"]) {
+        if (newMode === MODE_MUTE) newMode = MODE_ALWAYS;
+        else if (newMode === MODE_ALWAYS) newMode = MODE_MUTE;
+        // BYPASS remains the same when inverted
+      }
+
+      mode = newMode;
       if (mode !== null && mode !== MODE_NOTHING) {
         if (this.outputs?.length) {
           const outputNodes = getConnectedOutputNodesAndFilterPassThroughs(this);

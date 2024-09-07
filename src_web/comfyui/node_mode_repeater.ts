@@ -19,6 +19,12 @@ import {
   getGroupNodes,
 } from "./utils.js";
 
+const MODE_ALWAYS = 0;
+const MODE_MUTE = 2;
+const MODE_BYPASS = 4;
+const MODE_REPEATS = [MODE_MUTE, MODE_BYPASS];
+const MODE_NOTHING = -99; // MADE THIS UP.
+
 class NodeModeRepeater extends BaseCollectorNode {
   override readonly inputsPassThroughFollowing: PassThroughFollowing = PassThroughFollowing.ALL;
 
@@ -29,8 +35,14 @@ class NodeModeRepeater extends BaseCollectorNode {
   private hasRelayInput = false;
   private hasTogglerOutput = false;
 
+  static "@inverse_behavior" = {
+    type: "boolean",
+    default: false,
+  };
+
   constructor(title?: string) {
     super(title);
+    this.properties["inverse_behavior"] = false;
     this.onConstructed();
   }
 
@@ -152,14 +164,22 @@ class NodeModeRepeater extends BaseCollectorNode {
   /** When a mode change, we want all connected nodes to match except for connected relays. */
   override onModeChange(from: LGraphEventMode | undefined, to: LGraphEventMode) {
     super.onModeChange(from, to);
+    let newMode = to;
+
+    // Apply inverse behavior if enabled
+    if (this.properties["inverse_behavior"]) {
+      if (newMode === MODE_MUTE) newMode = MODE_ALWAYS;
+      else if (newMode === MODE_ALWAYS) newMode = MODE_MUTE;
+      // BYPASS remains the same when inverted
+    }
+
     const linkedNodes = getConnectedInputNodesAndFilterPassThroughs(this).filter(
       (node) => node.type !== NodeTypesString.NODE_MODE_RELAY,
     );
     if (linkedNodes.length) {
       for (const node of linkedNodes) {
         if (node.type !== NodeTypesString.NODE_MODE_RELAY) {
-          // Use "to" as there may be other getters in the way to access this.mode directly.
-          changeModeOfNodes(node, to);
+          changeModeOfNodes(node, newMode);
         }
       }
     } else if (this.graph?._groups?.length) {
@@ -170,8 +190,7 @@ class NodeModeRepeater extends BaseCollectorNode {
         if (groupNodes?.includes(this)) {
           for (const node of groupNodes) {
             if (node !== this) {
-              // Use "to" as there may be other getters in the way to access this.mode directly.
-              changeModeOfNodes(node, to);
+              changeModeOfNodes(node, newMode);
             }
           }
         }
