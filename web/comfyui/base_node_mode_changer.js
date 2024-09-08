@@ -57,7 +57,7 @@ export class BaseNodeModeChanger extends BaseAnyInputConnectedNode {
             widget.options = { on: "yes", off: "no" };
             widget.value = value;
             widget.doModeChange = (forceValue, skipOtherNodeCheck) => {
-                var _a, _b, _c;
+                var _a, _b;
                 const isGroupController = isGroupModeController(linkedNode);
                 let newValue = isGroupController
                     ? forceValue == null
@@ -67,13 +67,18 @@ export class BaseNodeModeChanger extends BaseAnyInputConnectedNode {
                         ? linkedNode.mode === this.modeOff
                         : forceValue;
                 if (skipOtherNodeCheck !== true) {
-                    if (newValue && ((_b = (_a = this.properties) === null || _a === void 0 ? void 0 : _a["toggleRestriction"]) === null || _b === void 0 ? void 0 : _b.includes(" one"))) {
-                        for (const widget of this.widgets) {
-                            widget.doModeChange(false, true);
+                    const restriction = (_a = this.properties) === null || _a === void 0 ? void 0 : _a["toggleRestriction"];
+                    if (newValue && (restriction === null || restriction === void 0 ? void 0 : restriction.includes(" one"))) {
+                        for (const w of this.widgets) {
+                            if (w !== widget) {
+                                w.doModeChange(false, true);
+                            }
                         }
                     }
-                    else if (!newValue && ((_c = this.properties) === null || _c === void 0 ? void 0 : _c["toggleRestriction"]) === "always one") {
-                        newValue = this.widgets.every((w) => !w.value || w === widget);
+                    else if (!newValue && restriction === "always one") {
+                        if (this.widgets.every((w) => !w.value || w === widget)) {
+                            newValue = true;
+                        }
                     }
                 }
                 if (isGroupController) {
@@ -86,6 +91,7 @@ export class BaseNodeModeChanger extends BaseAnyInputConnectedNode {
                     changeModeOfNodes(linkedNode, (newValue ? this.modeOn : this.modeOff));
                     widget.value = newValue;
                 }
+                this.applyToggleRestrictions(widget);
             };
             widget.callback = () => {
                 widget.doModeChange();
@@ -97,22 +103,28 @@ export class BaseNodeModeChanger extends BaseAnyInputConnectedNode {
             changed = true;
         }
         if (forceValue != null) {
-            if (isGroupController) {
-                if (linkedNode.globalToggle !== forceValue) {
-                    linkedNode.onAction("Toggle Global");
-                    widget.value = linkedNode.globalToggle;
-                    changed = true;
-                }
-            }
-            else {
-                const newMode = (forceValue ? this.modeOn : this.modeOff);
-                if (linkedNode.mode !== newMode) {
-                    changeModeOfNodes(linkedNode, newMode);
-                    changed = true;
+            widget.doModeChange(forceValue);
+            changed = true;
+        }
+        return changed;
+    }
+    applyToggleRestrictions(changedWidget) {
+        var _a;
+        const restriction = (_a = this.properties) === null || _a === void 0 ? void 0 : _a["toggleRestriction"];
+        if (restriction !== "max one" && restriction !== "always one") {
+            return;
+        }
+        const activeWidgets = this.widgets.filter((w) => w.value);
+        if (restriction === "max one" && activeWidgets.length > 1) {
+            for (const w of activeWidgets) {
+                if (w !== changedWidget) {
+                    w.doModeChange(false, true);
                 }
             }
         }
-        return changed;
+        else if (restriction === "always one" && activeWidgets.length === 0) {
+            changedWidget.doModeChange(true, true);
+        }
     }
     forceWidgetOff(widget, skipOtherNodeCheck) {
         widget.doModeChange(false, skipOtherNodeCheck);
