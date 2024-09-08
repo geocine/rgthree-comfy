@@ -14,6 +14,7 @@ export class GroupModeController extends BaseFastGroupsModeChanger {
         this.serialize_widgets = true;
         this.globalToggle = true;
         this.globalToggleBounds = null;
+        this.controlledByMuter = false;
         this.onConstructed();
     }
 
@@ -186,7 +187,7 @@ export class GroupModeController extends BaseFastGroupsModeChanger {
         let posX = margin;
 
         ctx.save();
-        ctx.fillStyle = LiteGraph.WIDGET_TEXT_COLOR;
+        ctx.fillStyle = this.controlledByMuter ? LiteGraph.WIDGET_SECONDARY_TEXT_COLOR : LiteGraph.WIDGET_TEXT_COLOR;
         ctx.textAlign = "left";
         ctx.textBaseline = "middle";
         ctx.font = "12px Arial";
@@ -196,11 +197,20 @@ export class GroupModeController extends BaseFastGroupsModeChanger {
         const toggleWidth = 20;
         const toggleHeight = height - 4;
         this.globalToggleBounds = [posX, posY + 2, toggleWidth, toggleHeight];
-        drawTogglePart(ctx, { posX, posY: posY + 2, height: toggleHeight, value: this.globalToggle });
+        drawTogglePart(ctx, { 
+            posX, 
+            posY: posY + 2, 
+            height: toggleHeight, 
+            value: this.globalToggle,
+            disabled: this.controlledByMuter
+        });
         ctx.restore();
     }
 
     onMouseDown(event, pos, graphcanvas) {
+        if (this.controlledByMuter) {
+            return false; // Disable interaction if controlled by a Muter
+        }
         
         if (this.globalToggleBounds) {
             const [x, y, width, height] = this.globalToggleBounds;
@@ -311,6 +321,11 @@ export class GroupModeController extends BaseFastGroupsModeChanger {
 
     onAction(action) {
         switch (action) {
+            case "Toggle Global":
+                this.globalToggle = !this.globalToggle;
+                this.setDirtyCanvas(true, true);
+                this.applyCurrentModesToAllGroups();
+                break;
             case "Mute all":
                 this.applyToAll({ mute: true, bypass: false });
                 break;
@@ -341,6 +356,30 @@ export class GroupModeController extends BaseFastGroupsModeChanger {
     computeSize(out) {
         const size = super.computeSize(out);
         return size;
+    }
+
+    onConnectionsChange(type, slotIndex, isConnected, link_info, input) {
+        console.log(`GroupModeController: onConnectionsChange called with:
+            type: ${type} (${type === LiteGraph.INPUT ? 'INPUT' : type === LiteGraph.OUTPUT ? 'OUTPUT' : 'UNKNOWN'})
+            slotIndex: ${slotIndex}
+            isConnected: ${isConnected}
+            link_info: ${JSON.stringify(link_info, null, 2)}
+            input: ${JSON.stringify(input, null, 2)}
+            Current controlledByMuter: ${this.controlledByMuter}
+        `);
+
+        if (super.onConnectionsChange) {
+            super.onConnectionsChange(type, slotIndex, isConnected, link_info, input);
+        }
+
+        // 0 is slot index for OPT_CONNECTION
+        if (type === LiteGraph.OUTPUT && slotIndex === 0) {
+            this.controlledByMuter = isConnected;
+            console.log(`GroupModeController: Controlled by Muter updated to: ${this.controlledByMuter}`);
+            this.setDirtyCanvas(true, true);
+        } else {
+            console.log(`GroupModeController: Connection change did not affect Muter control.`);
+        }
     }
 }
 

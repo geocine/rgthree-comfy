@@ -4,6 +4,19 @@ import {BaseAnyInputConnectedNode} from "./base_any_input_connected_node.js";
 import {changeModeOfNodes, PassThroughFollowing} from "./utils.js";
 import {wait} from "rgthree/common/shared_utils.js";
 
+type GroupModeControllerLike = LGraphNode & {
+  globalToggle: boolean;
+  onAction(action: "Toggle Global"): void;
+};
+
+function isGroupModeController(node: LGraphNode): node is GroupModeControllerLike {
+  return (
+    node.constructor.name === "GroupModeController" &&
+    "globalToggle" in node &&
+    typeof (node as {onAction?: unknown}).onAction === "function"
+  );
+}
+
 export class BaseNodeModeChanger extends BaseAnyInputConnectedNode {
   override readonly inputsPassThroughFollowing: PassThroughFollowing = PassThroughFollowing.ALL;
 
@@ -58,7 +71,12 @@ export class BaseNodeModeChanger extends BaseAnyInputConnectedNode {
 
   private setWidget(widget: IWidget, linkedNode: LGraphNode, forceValue?: boolean) {
     let changed = false;
-    const value = forceValue == null ? linkedNode.mode === this.modeOn : forceValue;
+    const isGroupController = isGroupModeController(linkedNode);
+    const value = isGroupController
+      ? linkedNode.globalToggle
+      : forceValue == null
+        ? linkedNode.mode === this.modeOn
+        : forceValue;
     let name = `Enable ${linkedNode.title}`;
     // Need to set initally
     if (widget.name !== name) {
@@ -66,7 +84,14 @@ export class BaseNodeModeChanger extends BaseAnyInputConnectedNode {
       widget.options = {on: "yes", off: "no"};
       widget.value = value;
       (widget as any).doModeChange = (forceValue?: boolean, skipOtherNodeCheck?: boolean) => {
-        let newValue = forceValue == null ? linkedNode.mode === this.modeOff : forceValue;
+        const isGroupController = isGroupModeController(linkedNode);
+        let newValue = isGroupController
+          ? forceValue == null
+            ? !linkedNode.globalToggle
+            : forceValue
+          : forceValue == null
+            ? linkedNode.mode === this.modeOff
+            : forceValue;
         if (skipOtherNodeCheck !== true) {
           if (newValue && (this.properties?.["toggleRestriction"] as string)?.includes(" one")) {
             for (const widget of this.widgets) {
@@ -76,19 +101,38 @@ export class BaseNodeModeChanger extends BaseAnyInputConnectedNode {
             newValue = this.widgets.every((w) => !w.value || w === widget);
           }
         }
-        changeModeOfNodes(linkedNode, (newValue ? this.modeOn : this.modeOff))
-        widget.value = newValue;
+        if (isGroupController) {
+          if (linkedNode.globalToggle !== newValue) {
+            linkedNode.onAction("Toggle Global");
+          }
+          widget.value = linkedNode.globalToggle;
+        } else {
+          changeModeOfNodes(linkedNode, (newValue ? this.modeOn : this.modeOff));
+          widget.value = newValue;
+        }
       };
       widget.callback = () => {
         (widget as any).doModeChange();
       };
       changed = true;
     }
+    if (isGroupController && widget.value !== value) {
+      widget.value = value;
+      changed = true;
+    }
     if (forceValue != null) {
-      const newMode = (forceValue ? this.modeOn : this.modeOff) as 1 | 2 | 3 | 4;
-      if (linkedNode.mode !== newMode) {
-        changeModeOfNodes(linkedNode, newMode);
-        changed = true;
+      if (isGroupController) {
+        if (linkedNode.globalToggle !== forceValue) {
+          linkedNode.onAction("Toggle Global");
+          widget.value = linkedNode.globalToggle;
+          changed = true;
+        }
+      } else {
+        const newMode = (forceValue ? this.modeOn : this.modeOff) as 1 | 2 | 3 | 4;
+        if (linkedNode.mode !== newMode) {
+          changeModeOfNodes(linkedNode, newMode);
+          changed = true;
+        }
       }
     }
     return changed;

@@ -1,6 +1,11 @@
 import { BaseAnyInputConnectedNode } from "./base_any_input_connected_node.js";
 import { changeModeOfNodes, PassThroughFollowing } from "./utils.js";
 import { wait } from "../../rgthree/common/shared_utils.js";
+function isGroupModeController(node) {
+    return (node.constructor.name === "GroupModeController" &&
+        "globalToggle" in node &&
+        typeof node.onAction === "function");
+}
 export class BaseNodeModeChanger extends BaseAnyInputConnectedNode {
     constructor(title) {
         super(title);
@@ -40,7 +45,12 @@ export class BaseNodeModeChanger extends BaseAnyInputConnectedNode {
     }
     setWidget(widget, linkedNode, forceValue) {
         let changed = false;
-        const value = forceValue == null ? linkedNode.mode === this.modeOn : forceValue;
+        const isGroupController = isGroupModeController(linkedNode);
+        const value = isGroupController
+            ? linkedNode.globalToggle
+            : forceValue == null
+                ? linkedNode.mode === this.modeOn
+                : forceValue;
         let name = `Enable ${linkedNode.title}`;
         if (widget.name !== name) {
             widget.name = `Enable ${linkedNode.title}`;
@@ -48,7 +58,14 @@ export class BaseNodeModeChanger extends BaseAnyInputConnectedNode {
             widget.value = value;
             widget.doModeChange = (forceValue, skipOtherNodeCheck) => {
                 var _a, _b, _c;
-                let newValue = forceValue == null ? linkedNode.mode === this.modeOff : forceValue;
+                const isGroupController = isGroupModeController(linkedNode);
+                let newValue = isGroupController
+                    ? forceValue == null
+                        ? !linkedNode.globalToggle
+                        : forceValue
+                    : forceValue == null
+                        ? linkedNode.mode === this.modeOff
+                        : forceValue;
                 if (skipOtherNodeCheck !== true) {
                     if (newValue && ((_b = (_a = this.properties) === null || _a === void 0 ? void 0 : _a["toggleRestriction"]) === null || _b === void 0 ? void 0 : _b.includes(" one"))) {
                         for (const widget of this.widgets) {
@@ -59,19 +76,40 @@ export class BaseNodeModeChanger extends BaseAnyInputConnectedNode {
                         newValue = this.widgets.every((w) => !w.value || w === widget);
                     }
                 }
-                changeModeOfNodes(linkedNode, (newValue ? this.modeOn : this.modeOff));
-                widget.value = newValue;
+                if (isGroupController) {
+                    if (linkedNode.globalToggle !== newValue) {
+                        linkedNode.onAction("Toggle Global");
+                    }
+                    widget.value = linkedNode.globalToggle;
+                }
+                else {
+                    changeModeOfNodes(linkedNode, (newValue ? this.modeOn : this.modeOff));
+                    widget.value = newValue;
+                }
             };
             widget.callback = () => {
                 widget.doModeChange();
             };
             changed = true;
         }
+        if (isGroupController && widget.value !== value) {
+            widget.value = value;
+            changed = true;
+        }
         if (forceValue != null) {
-            const newMode = (forceValue ? this.modeOn : this.modeOff);
-            if (linkedNode.mode !== newMode) {
-                changeModeOfNodes(linkedNode, newMode);
-                changed = true;
+            if (isGroupController) {
+                if (linkedNode.globalToggle !== forceValue) {
+                    linkedNode.onAction("Toggle Global");
+                    widget.value = linkedNode.globalToggle;
+                    changed = true;
+                }
+            }
+            else {
+                const newMode = (forceValue ? this.modeOn : this.modeOff);
+                if (linkedNode.mode !== newMode) {
+                    changeModeOfNodes(linkedNode, newMode);
+                    changed = true;
+                }
             }
         }
         return changed;
