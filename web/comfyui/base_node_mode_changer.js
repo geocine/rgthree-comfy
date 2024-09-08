@@ -47,7 +47,8 @@ export class BaseNodeModeChanger extends BaseAnyInputConnectedNode {
     }
     setWidget(widget, linkedNode, forceValue) {
         let value;
-        if (linkedNode.constructor.name === "GroupModeController") {
+        const isGroupModeController = linkedNode.constructor.name === "GroupModeController";
+        if (isGroupModeController) {
             value = linkedNode.globalToggle;
         } else {
             value = forceValue == null ? linkedNode.mode === this.modeOn : forceValue;
@@ -59,30 +60,40 @@ export class BaseNodeModeChanger extends BaseAnyInputConnectedNode {
 
         widget.doModeChange = (forceValue, skipOtherNodeCheck) => {
             let newValue;
-            if (linkedNode.constructor.name === "GroupModeController") {
+            if (isGroupModeController) {
                 newValue = forceValue == null ? !linkedNode.globalToggle : forceValue;
             } else {
                 newValue = forceValue == null ? linkedNode.mode === this.modeOff : forceValue;
             }
 
             if (skipOtherNodeCheck !== true) {
-                if (newValue && this.properties?.["toggleRestriction"]?.includes(" one")) {
+                const restriction = this.properties?.["toggleRestriction"];
+                if (newValue && restriction?.includes(" one")) {
                     for (const w of this.widgets) {
-                        w.doModeChange(false, true);
+                        if (w !== widget) {
+                            w.doModeChange(false, true);
+                        }
                     }
                 }
-                else if (!newValue && this.properties?.["toggleRestriction"] === "always one") {
-                    newValue = this.widgets.every((w) => !w.value || w === widget);
+                else if (!newValue && restriction === "always one") {
+                    if (this.widgets.every((w) => !w.value || w === widget)) {
+                        newValue = true; // Prevent turning off if it's the last one on
+                    }
                 }
             }
 
-            if (linkedNode.constructor.name === "GroupModeController") {
-                linkedNode.onAction("Toggle Global");
+            if (isGroupModeController) {
+                if (linkedNode.globalToggle !== newValue) {
+                    linkedNode.onAction("Toggle Global");
+                }
                 widget.value = linkedNode.globalToggle;
             } else {
                 linkedNode.mode = (newValue ? this.modeOn : this.modeOff);
                 widget.value = newValue;
             }
+
+            // Apply restrictions after change
+            this.applyToggleRestrictions(widget);
         };
 
         widget.callback = () => {
@@ -90,11 +101,28 @@ export class BaseNodeModeChanger extends BaseAnyInputConnectedNode {
         };
 
         if (forceValue != null) {
-            if (linkedNode.constructor.name === "GroupModeController") {
-                linkedNode.onAction("Toggle Global");
-                widget.value = linkedNode.globalToggle;
-            } else {
-                linkedNode.mode = (forceValue ? this.modeOn : this.modeOff);
+            widget.doModeChange(forceValue);
+        }
+    }
+    applyToggleRestrictions(changedWidget) {
+        const restriction = this.properties?.["toggleRestriction"];
+        if (restriction === "max one" || restriction === "always one") {
+            let activeCount = 0;
+            let lastActiveWidget = null;
+            for (const w of this.widgets) {
+                if (w.value) {
+                    activeCount++;
+                    lastActiveWidget = w;
+                }
+            }
+            if (restriction === "max one" && activeCount > 1) {
+                for (const w of this.widgets) {
+                    if (w !== changedWidget && w.value) {
+                        w.doModeChange(false, true);
+                    }
+                }
+            } else if (restriction === "always one" && activeCount === 0 && lastActiveWidget) {
+                lastActiveWidget.doModeChange(true, true);
             }
         }
         if (forceValue != null) {
