@@ -19,6 +19,7 @@ export class GroupModeController extends RgthreeBaseVirtualNode {
         this.inputNodes = [];
         this.schedulePromise = null;
         this.repeaterNode = null;
+        this.isUpdating = false;
         this.onConstructed();
     }
 
@@ -288,6 +289,15 @@ export class GroupModeController extends RgthreeBaseVirtualNode {
             widget.value[toggleType] = !widget.value[toggleType];
             widget.value[toggleType === 'mute' ? 'bypass' : 'mute'] = false;
             console.log(`${toggleType} toggle clicked. New state: M${widget.value.mute ? 1 : 0} B${widget.value.bypass ? 1 : 0}`);
+            
+            // Update repeater if it exists and this widget corresponds to it
+            if (this.repeaterNode && !this.repeaterNode.isUpdating && widget.entity === this.repeaterNode) {
+                const newMode = widget.value.mute ? LiteGraph.NEVER : 
+                               (widget.value.bypass ? 4 : LiteGraph.ALWAYS);
+                this.repeaterNode.mode = newMode;
+                this.repeaterNode.onModeChange(this.repeaterNode.mode, newMode);
+            }
+            
             return true;
         }
         return false;
@@ -327,6 +337,9 @@ export class GroupModeController extends RgthreeBaseVirtualNode {
     }
 
     applyCurrentModesToAllGroups() {
+        if (this.isUpdating) return;
+        this.isUpdating = true;
+
         if (this.globalToggle) {
             for (const widget of this.widgets) {
                 if (widget.entity instanceof LGraphGroup) {
@@ -348,10 +361,24 @@ export class GroupModeController extends RgthreeBaseVirtualNode {
         }
         app.graph.setDirtyCanvas(true, false);
 
-        // If connected to a repeater, sync its mode
-        if (this.repeaterNode) {
-            this.repeaterNode.mode = this.globalToggle ? LiteGraph.ALWAYS : LiteGraph.NEVER;
+        // Update connected NodeModeRepeater
+        if (this.repeaterNode && !this.repeaterNode.isUpdating) {
+            if (this.globalToggle) {
+                const repeaterWidget = this.widgets.find(w => w.entity === this.repeaterNode);
+                if (repeaterWidget) {
+                    const newMode = repeaterWidget.value.mute ? LiteGraph.NEVER : 
+                                    (repeaterWidget.value.bypass ? 4 : LiteGraph.ALWAYS);
+                    this.repeaterNode.mode = newMode;
+                    this.repeaterNode.onModeChange(this.repeaterNode.mode, newMode);
+                }
+            } else {
+                // Set repeater to ALWAYS when global toggle is off
+                this.repeaterNode.mode = LiteGraph.ALWAYS;
+                this.repeaterNode.onModeChange(this.repeaterNode.mode, LiteGraph.ALWAYS);
+            }
         }
+
+        this.isUpdating = false;
     }
 
     applyModeToGroup(group, value) {
@@ -407,7 +434,7 @@ export class GroupModeController extends RgthreeBaseVirtualNode {
         const size = super.computeSize(out);
         const widgetSpacing = 5; // Same spacing as in updateWidgetPosition
         // Add extra height for the global toggle and widget spacing
-        size[1] += 25 + (this.widgets.length - 1) * widgetSpacing;
+        size[1] += 2 + (this.widgets.length - 1) * widgetSpacing;
         return size;
     }
 
@@ -425,7 +452,8 @@ export class GroupModeController extends RgthreeBaseVirtualNode {
                     const connectedNode = this.graph.getNodeById(link_info.origin_id);
                     if (this.isNodeModeRepeater(connectedNode)) {
                         this.repeaterNode = connectedNode;
-                        this.handleRepeaterConnection(connectedNode);
+                        // Instead of syncing, just update the repeater's mode
+                        this.repeaterNode.mode = this.globalToggle ? LiteGraph.ALWAYS : LiteGraph.NEVER;
                     }
                 }
             } else {
@@ -483,23 +511,6 @@ export class GroupModeController extends RgthreeBaseVirtualNode {
 
     isNodeModeRepeater(node) {
         return node && typeof node === 'object' && node.type === NodeTypesString.NODE_MODE_REPEATER;
-    }
-
-    handleRepeaterConnection(repeaterNode) {
-        // Sync the initial state with the repeater
-        this.syncWithRepeater(repeaterNode);
-
-        // Add a listener for mode changes on the repeater
-        repeaterNode.onModeChange = (from, to) => {
-            this.syncWithRepeater(repeaterNode);
-        };
-    }
-
-    syncWithRepeater(repeaterNode) {
-        const newMode = repeaterNode.mode;
-        this.globalToggle = newMode !== LiteGraph.NEVER; // Mute is NEVER, so invert for our globalToggle
-        this.applyCurrentModesToAllGroups();
-        this.setDirtyCanvas(true, true);
     }
 }
 

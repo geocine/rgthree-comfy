@@ -2,11 +2,13 @@ import { app } from "../../scripts/app.js";
 import { BaseCollectorNode } from "./base_node_collector.js";
 import { NodeTypesString, stripRgthree } from "./constants.js";
 import { PassThroughFollowing, addConnectionLayoutSupport, getConnectedInputNodesAndFilterPassThroughs, getConnectedOutputNodesAndFilterPassThroughs, } from "./utils.js";
+
 const MODE_ALWAYS = 0;
 const MODE_MUTE = 2;
 const MODE_BYPASS = 4;
 const MODE_REPEATS = [MODE_MUTE, MODE_BYPASS];
 const MODE_NOTHING = -99;
+
 class NodeModeRepeater extends BaseCollectorNode {
     constructor(title) {
         super(title);
@@ -16,7 +18,9 @@ class NodeModeRepeater extends BaseCollectorNode {
         this.hasTogglerOutput = false;
         this.properties["inverse_behavior"] = false;
         this.onConstructed();
+        this.isUpdating = false;
     }
+
     onConstructed() {
         this.addOutput("OPT_CONNECTION", "*", {
             color_on: "#Fc0",
@@ -24,17 +28,17 @@ class NodeModeRepeater extends BaseCollectorNode {
         });
         return super.onConstructed();
     }
+
     configure(info) {
-        var _a;
-        if ((_a = info.outputs) === null || _a === void 0 ? void 0 : _a.length) {
+        if (info.outputs?.length) {
             info.outputs.length = 1;
         }
         super.configure(info);
     }
+
     onConnectOutput(outputIndex, inputType, inputSlot, inputNode, inputIndex) {
         let canConnect = !this.hasRelayInput;
-        canConnect =
-            canConnect && super.onConnectOutput(outputIndex, inputType, inputSlot, inputNode, inputIndex);
+        canConnect = canConnect && super.onConnectOutput(outputIndex, inputType, inputSlot, inputNode, inputIndex);
         let nextNode = getConnectedOutputNodesAndFilterPassThroughs(this, inputNode)[0] || inputNode;
         return (canConnect &&
             [
@@ -44,44 +48,45 @@ class NodeModeRepeater extends BaseCollectorNode {
                 NodeTypesString.FAST_ACTIONS_BUTTON,
                 NodeTypesString.REROUTE,
                 NodeTypesString.RANDOM_UNMUTER,
+                NodeTypesString.GROUP_MODE_CONTROLLER,
             ].includes(nextNode.type || ""));
     }
+
     onConnectInput(inputIndex, outputType, outputSlot, outputNode, outputIndex) {
-        var _a;
-        let canConnect = (_a = super.onConnectInput) === null || _a === void 0 ? void 0 : _a.call(this, inputIndex, outputType, outputSlot, outputNode, outputIndex);
+        let canConnect = super.onConnectInput?.(inputIndex, outputType, outputSlot, outputNode, outputIndex);
         let nextNode = getConnectedOutputNodesAndFilterPassThroughs(this, outputNode)[0] || outputNode;
         const isNextNodeRelay = nextNode.type === NodeTypesString.NODE_MODE_RELAY;
         return canConnect && (!isNextNodeRelay || !this.hasTogglerOutput);
     }
+
     onConnectionsChange(type, slotIndex, isConnected, linkInfo, ioSlot) {
         super.onConnectionsChange(type, slotIndex, isConnected, linkInfo, ioSlot);
         let hasTogglerOutput = false;
         let hasRelayInput = false;
         const outputNodes = getConnectedOutputNodesAndFilterPassThroughs(this);
         for (const outputNode of outputNodes) {
-            if ((outputNode === null || outputNode === void 0 ? void 0 : outputNode.type) === NodeTypesString.FAST_MUTER ||
-                (outputNode === null || outputNode === void 0 ? void 0 : outputNode.type) === NodeTypesString.FAST_BYPASSER) {
+            if (outputNode?.type === NodeTypesString.FAST_MUTER ||
+                outputNode?.type === NodeTypesString.FAST_BYPASSER ||
+                outputNode?.type === NodeTypesString.GROUP_MODE_CONTROLLER) {
                 hasTogglerOutput = true;
                 break;
             }
         }
         const inputNodes = getConnectedInputNodesAndFilterPassThroughs(this);
         for (const [index, inputNode] of inputNodes.entries()) {
-            if ((inputNode === null || inputNode === void 0 ? void 0 : inputNode.type) === NodeTypesString.NODE_MODE_RELAY) {
+            if (inputNode?.type === NodeTypesString.NODE_MODE_RELAY) {
                 if (hasTogglerOutput) {
                     console.log(`Can't be connected to a Relay if also output to a toggler.`);
                     this.disconnectInput(index);
-                }
-                else {
+                } else {
                     hasRelayInput = true;
                     if (this.inputs[index]) {
                         this.inputs[index].color_on = "#FC0";
                         this.inputs[index].color_off = "#a80";
                     }
                 }
-            }
-            else {
-                inputNode.mode = this.mode;
+            } else {
+                this.applyModeToNode(inputNode, this.mode);
             }
         }
         this.hasTogglerOutput = hasTogglerOutput;
@@ -91,45 +96,75 @@ class NodeModeRepeater extends BaseCollectorNode {
                 this.disconnectOutput(0);
                 this.removeOutput(0);
             }
-        }
-        else if (!this.outputs[0]) {
+        } else if (!this.outputs[0]) {
             this.addOutput("OPT_CONNECTION", "*", {
                 color_on: "#Fc0",
                 color_off: "#a80",
             });
         }
     }
+
     onModeChange(from, to) {
-        var _a, _b;
+        if (this.isUpdating) return;
+        this.isUpdating = true;
+
         super.onModeChange(from, to);
         let newMode = to;
         if (this.properties["inverse_behavior"]) {
-            if (newMode === MODE_MUTE)
-                newMode = MODE_ALWAYS;
-            else if (newMode === MODE_ALWAYS)
-                newMode = MODE_MUTE;
+            if (newMode === MODE_MUTE) newMode = MODE_ALWAYS;
+            else if (newMode === MODE_ALWAYS) newMode = MODE_MUTE;
         }
-        const linkedNodes = getConnectedInputNodesAndFilterPassThroughs(this).filter((node) => node.type !== NodeTypesString.NODE_MODE_RELAY);
+        const linkedNodes = getConnectedInputNodesAndFilterPassThroughs(this)
+            .filter((node) => node.type !== NodeTypesString.NODE_MODE_RELAY);
         if (linkedNodes.length) {
             for (const node of linkedNodes) {
-                if (node.type !== NodeTypesString.NODE_MODE_RELAY) {
-                    node.mode = newMode;
+                if (!node.isUpdating) {
+                    this.applyModeToNode(node, newMode);
                 }
             }
-        }
-        else if ((_a = app.graph._groups) === null || _a === void 0 ? void 0 : _a.length) {
+        } else if (app.graph._groups?.length) {
             for (const group of app.graph._groups) {
                 group.recomputeInsideNodes();
-                if ((_b = group._nodes) === null || _b === void 0 ? void 0 : _b.includes(this)) {
+                if (group._nodes?.includes(this)) {
                     for (const node of group._nodes) {
-                        if (node !== this) {
-                            node.mode = newMode;
+                        if (node !== this && !node.isUpdating) {
+                            this.applyModeToNode(node, newMode);
                         }
                     }
                 }
             }
         }
+
+        // Update the GroupModeController if connected
+        const connectedGroupModeController = getConnectedOutputNodesAndFilterPassThroughs(this)
+            .find(node => node.type === NodeTypesString.GROUP_MODE_CONTROLLER);
+        if (connectedGroupModeController && !connectedGroupModeController.isUpdating) {
+            const repeaterWidget = connectedGroupModeController.widgets.find(w => w.entity === this);
+            if (repeaterWidget) {
+                repeaterWidget.value.mute = newMode === LiteGraph.NEVER;
+                repeaterWidget.value.bypass = newMode === 4;
+                connectedGroupModeController.setDirtyCanvas(true, true);
+            }
+        }
+
+        this.isUpdating = false;
     }
+
+    applyModeToNode(node, mode) {
+        if (node.type === NodeTypesString.GROUP_MODE_CONTROLLER) {
+            if (!node.isUpdating) {
+                const repeaterWidget = node.widgets.find(w => w.entity === this);
+                if (repeaterWidget) {
+                    repeaterWidget.value.mute = mode === LiteGraph.NEVER;
+                    repeaterWidget.value.bypass = mode === 4;
+                    node.setDirtyCanvas(true, true);
+                }
+            }
+        } else {
+            node.mode = mode;
+        }
+    }
+
     getHelp() {
         return `
       <p>
@@ -139,12 +174,12 @@ class NodeModeRepeater extends BaseCollectorNode {
       </p>
       <ul>
         <li><p>
-          Optionally, connect this mode's output to a ${stripRgthree(NodeTypesString.FAST_MUTER)}
-          or ${stripRgthree(NodeTypesString.FAST_BYPASSER)} for a single toggle to quickly
-          mute/bypass all its connected nodes.
+          Optionally, connect this mode's output to a ${stripRgthree(NodeTypesString.FAST_MUTER)},
+          ${stripRgthree(NodeTypesString.FAST_BYPASSER)}, or ${stripRgthree(NodeTypesString.GROUP_MODE_CONTROLLER)}
+          for a single toggle to quickly mute/bypass all its connected nodes.
         </p></li>
         <li><p>
-          Optionally, connect a ${stripRgthree(NodeTypesString.NODE_MODE_RELAY)} to this nodes
+          Optionally, connect a ${stripRgthree(NodeTypesString.NODE_MODE_RELAY)} to this node's
           inputs to have it automatically toggle its mode. If connected, this will always take
           precedence (and disconnect any connected fast togglers).
         </p></li>
@@ -152,12 +187,14 @@ class NodeModeRepeater extends BaseCollectorNode {
     `;
     }
 }
+
 NodeModeRepeater.type = NodeTypesString.NODE_MODE_REPEATER;
 NodeModeRepeater.title = NodeTypesString.NODE_MODE_REPEATER;
 NodeModeRepeater["@inverse_behavior"] = {
     type: "boolean",
     default: false,
 };
+
 app.registerExtension({
     name: "rgthree.NodeModeRepeater",
     registerCustomNodes() {
