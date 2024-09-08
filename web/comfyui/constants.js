@@ -42,6 +42,7 @@ export const NodeTypesString = {
     BOOKMARK: addRgthree("Bookmark"),
     IMAGE_COMPARER: addRgthree("Image Comparer"),
     IMAGE_INSET_CROP: addRgthree("Image Inset Crop"),
+    GROUP_MODE_CONTROLLER: addRgthree("Group Mode Controller"),
 };
 const UNRELEASED_KEYS = {
     [NodeTypesString.DYNAMIC_CONTEXT]: "dynamic_context",
