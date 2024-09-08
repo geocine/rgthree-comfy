@@ -1,6 +1,7 @@
 import type {
   INodeInputSlot,
   INodeOutputSlot,
+  ISerialisedNode,
   LGraphEventMode,
   LGraphGroup,
   LGraphNode,
@@ -34,6 +35,7 @@ class NodeModeRepeater extends BaseCollectorNode {
 
   private hasRelayInput = false;
   private hasTogglerOutput = false;
+  private isUpdating = false;
 
   static "@inverse_behavior" = {
     type: "boolean",
@@ -53,6 +55,13 @@ class NodeModeRepeater extends BaseCollectorNode {
     });
 
     return super.onConstructed();
+  }
+
+  override configure(info: ISerialisedNode): void {
+    if (info.outputs?.length) {
+      info.outputs.length = 1;
+    }
+    super.configure(info);
   }
 
   override onConnectOutput(
@@ -77,6 +86,7 @@ class NodeModeRepeater extends BaseCollectorNode {
         NodeTypesString.FAST_ACTIONS_BUTTON,
         NodeTypesString.REROUTE,
         NodeTypesString.RANDOM_UNMUTER,
+        NodeTypesString.GROUP_MODE_CONTROLLER,
       ].includes(nextNode.type || "")
     );
   }
@@ -118,7 +128,8 @@ class NodeModeRepeater extends BaseCollectorNode {
     for (const outputNode of outputNodes) {
       if (
         outputNode?.type === NodeTypesString.FAST_MUTER ||
-        outputNode?.type === NodeTypesString.FAST_BYPASSER
+        outputNode?.type === NodeTypesString.FAST_BYPASSER ||
+        outputNode?.type === NodeTypesString.GROUP_MODE_CONTROLLER
       ) {
         hasTogglerOutput = true;
         break;
@@ -140,7 +151,7 @@ class NodeModeRepeater extends BaseCollectorNode {
           }
         }
       } else {
-        changeModeOfNodes(inputNode, this.mode);
+        this.applyModeToNode(inputNode, this.mode);
       }
     }
 
@@ -163,38 +174,70 @@ class NodeModeRepeater extends BaseCollectorNode {
 
   /** When a mode change, we want all connected nodes to match except for connected relays. */
   override onModeChange(from: LGraphEventMode | undefined, to: LGraphEventMode) {
-    super.onModeChange(from, to);
-    let newMode = to;
+    if (this.isUpdating) return;
+    this.isUpdating = true;
+    try {
+      super.onModeChange(from, to);
+      let newMode = to;
 
-    // Apply inverse behavior if enabled
-    if (this.properties["inverse_behavior"]) {
-      if (newMode === MODE_MUTE) newMode = MODE_ALWAYS;
-      else if (newMode === MODE_ALWAYS) newMode = MODE_MUTE;
-      // BYPASS remains the same when inverted
-    }
-
-    const linkedNodes = getConnectedInputNodesAndFilterPassThroughs(this).filter(
-      (node) => node.type !== NodeTypesString.NODE_MODE_RELAY,
-    );
-    if (linkedNodes.length) {
-      for (const node of linkedNodes) {
-        if (node.type !== NodeTypesString.NODE_MODE_RELAY) {
-          changeModeOfNodes(node, newMode);
-        }
+      // Apply inverse behavior if enabled.
+      if (this.properties["inverse_behavior"]) {
+        if (newMode === MODE_MUTE) newMode = MODE_ALWAYS;
+        else if (newMode === MODE_ALWAYS) newMode = MODE_MUTE;
+        // BYPASS remains the same when inverted.
       }
-    } else if (this.graph?._groups?.length) {
-      // No linked nodes.. check if we're in a group.
-      for (const group of this.graph._groups as LGraphGroup[]) {
-        group.recomputeInsideNodes();
-        const groupNodes = getGroupNodes(group);
-        if (groupNodes?.includes(this)) {
-          for (const node of groupNodes) {
-            if (node !== this) {
-              changeModeOfNodes(node, newMode);
+
+      const linkedNodes = getConnectedInputNodesAndFilterPassThroughs(this).filter(
+        (node) => node.type !== NodeTypesString.NODE_MODE_RELAY,
+      );
+      if (linkedNodes.length) {
+        for (const node of linkedNodes) {
+          if (!(node as any).isUpdating) {
+            this.applyModeToNode(node, newMode);
+          }
+        }
+      } else if (this.graph?._groups?.length) {
+        // No linked nodes.. check if we're in a group.
+        for (const group of this.graph._groups as LGraphGroup[]) {
+          group.recomputeInsideNodes();
+          const groupNodes = getGroupNodes(group);
+          if (groupNodes?.includes(this)) {
+            for (const node of groupNodes) {
+              if (node !== this && !(node as any).isUpdating) {
+                this.applyModeToNode(node, newMode);
+              }
             }
           }
         }
       }
+
+      const connectedGroupModeController = getConnectedOutputNodesAndFilterPassThroughs(this).find(
+        (node) => node.type === NodeTypesString.GROUP_MODE_CONTROLLER,
+      );
+      if (connectedGroupModeController && !(connectedGroupModeController as any).isUpdating) {
+        this.updateGroupModeControllerWidget(connectedGroupModeController, newMode);
+      }
+    } finally {
+      this.isUpdating = false;
+    }
+  }
+
+  private applyModeToNode(node: LGraphNode, mode: LGraphEventMode) {
+    if (node.type === NodeTypesString.GROUP_MODE_CONTROLLER) {
+      if (!(node as any).isUpdating) {
+        this.updateGroupModeControllerWidget(node, mode);
+      }
+    } else {
+      changeModeOfNodes(node, mode);
+    }
+  }
+
+  private updateGroupModeControllerWidget(node: LGraphNode, mode: LGraphEventMode) {
+    const repeaterWidget = node.widgets?.find((w: any) => w.entity === this) as any;
+    if (repeaterWidget) {
+      repeaterWidget.value.mute = mode === LiteGraph.NEVER;
+      repeaterWidget.value.bypass = mode === MODE_BYPASS;
+      node.setDirtyCanvas(true, true);
     }
   }
 
@@ -207,12 +250,12 @@ class NodeModeRepeater extends BaseCollectorNode {
       </p>
       <ul>
         <li><p>
-          Optionally, connect this mode's output to a ${stripRgthree(NodeTypesString.FAST_MUTER)}
-          or ${stripRgthree(NodeTypesString.FAST_BYPASSER)} for a single toggle to quickly
-          mute/bypass all its connected nodes.
+          Optionally, connect this mode's output to a ${stripRgthree(NodeTypesString.FAST_MUTER)},
+          ${stripRgthree(NodeTypesString.FAST_BYPASSER)}, or ${stripRgthree(NodeTypesString.GROUP_MODE_CONTROLLER)}
+          for a single toggle to quickly mute/bypass all its connected nodes.
         </p></li>
         <li><p>
-          Optionally, connect a ${stripRgthree(NodeTypesString.NODE_MODE_RELAY)} to this nodes
+          Optionally, connect a ${stripRgthree(NodeTypesString.NODE_MODE_RELAY)} to this node's
           inputs to have it automatically toggle its mode. If connected, this will always take
           precedence (and disconnect any connected fast togglers).
         </p></li>
