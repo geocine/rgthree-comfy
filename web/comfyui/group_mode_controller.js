@@ -1,12 +1,13 @@
 import { app } from "../../scripts/app.js";
 import { NodeTypesString } from "./constants.js";
-import { BaseFastGroupsModeChanger } from "./fast_groups_muter.js";
+import { RgthreeBaseVirtualNode } from "./base_node.js";
 import { SERVICE as FAST_GROUPS_SERVICE } from "./services/fast_groups_service.js";
 import { drawNodeWidget, fitString, drawTogglePart } from "./utils_canvas.js";
+import { getConnectedInputNodesAndFilterPassThroughs } from "./utils.js";
 
 const PROPERTY_SHOW_NAV = "showNav";
 
-export class GroupModeController extends BaseFastGroupsModeChanger {
+export class GroupModeController extends RgthreeBaseVirtualNode {
     constructor(title = GroupModeController.title) {
         super(title);
         this.comfyClass = NodeTypesString.GROUP_MODE_CONTROLLER;
@@ -15,52 +16,92 @@ export class GroupModeController extends BaseFastGroupsModeChanger {
         this.globalToggle = true;
         this.globalToggleBounds = null;
         this.controlledByMuter = false;
+        this.inputNodes = [];
+        this.schedulePromise = null;
+        this.repeaterNode = null;
         this.onConstructed();
     }
 
     onConstructed() {
+        this.addInput("", "*");
+        this.addOutput("OPT_CONNECTION", "*");
         return super.onConstructed();
+    }
+
+    onAdded(graph) {
+        FAST_GROUPS_SERVICE.addFastGroupNode(this);
+    }
+
+    onRemoved() {
+        FAST_GROUPS_SERVICE.removeFastGroupNode(this);
     }
 
     refreshWidgets() {
         const groups = FAST_GROUPS_SERVICE.getGroups(this.properties.sort);
+        const linkedNodes = getConnectedInputNodesAndFilterPassThroughs(this);
         let index = 0;
         const initialWidgetCount = this.widgets.length;
-    
-        this.widgets = this.widgets.filter(w => w.name !== "globalToggle");
-    
+
+        // Process groups
         for (const group of groups) {
             if (this.shouldIncludeGroup(group)) {
-                const widgetName = `Control ${group.title}`;
-                let widget = this.widgets.find((w) => w.name === widgetName);
-                if (!widget) {
-                    widget = this.createGroupWidget(group);
-                }
-    
-                if (this.widgets[index] !== widget) {
-                    const oldIndex = this.widgets.findIndex((w) => w === widget);
-                    this.widgets.splice(index, 0, this.widgets.splice(oldIndex, 1)[0]);
-                }
-    
-                index++;
+                this.processEntity(group, index++);
             }
         }
-    
+
+        // Process linked nodes
+        for (const node of linkedNodes) {
+            this.processEntity(node, index++);
+        }
+
         this.widgets.splice(index);
-    
+
+        // Update positions for all widgets
+        this.widgets.forEach((widget, i) => this.updateWidgetPosition(widget, i));
+
         if (this.widgets.length !== initialWidgetCount) {
             this.setSize(this.computeSize());
         }
+        this.setDirtyCanvas(true, true);
     }
 
-    createGroupWidget(group) {
-        return this.addCustomWidget({
-            name: `Control ${group.title}`,
-            label: group.title,
+    processEntity(entity, index) {
+        const widgetName = `Control ${entity.title || entity.name}`;
+        let widget = this.widgets.find((w) => w.name === widgetName);
+        if (!widget) {
+            widget = this.createEntityWidget(entity, index);
+        } else {
+            this.updateWidgetPosition(widget, index);
+        }
+
+        if (this.widgets[index] !== widget) {
+            const oldIndex = this.widgets.findIndex((w) => w === widget);
+            if (oldIndex !== -1) {
+                this.widgets.splice(oldIndex, 1);
+            }
+            this.widgets.splice(index, 0, widget);
+        }
+    }
+
+    createEntityWidget(entity, index) {
+        const widget = this.addCustomWidget({
+            name: `Control ${entity.title || entity.name}`,
+            label: entity.title || entity.name,
             value: { mute: false, bypass: false },
             draw: (ctx, node, width, posY, height) => this.drawDoubleToggle(ctx, node, width, posY, height),
-            mouse: (event, pos, node) => this.handleMouseEvent(event, pos, node)
+            mouse: (event, pos, node) => this.handleMouseEvent(event, pos, node),
+            entity: entity
         });
+        this.updateWidgetPosition(widget, index);
+        return widget;
+    }
+
+    updateWidgetPosition(widget, index) {
+        const inputOutputHeight = Math.max(this.inputs.length, this.outputs.length) * LiteGraph.NODE_SLOT_HEIGHT;
+        const globalToggleHeight = 25; // Adjust this value based on your global toggle height
+        const widgetSpacing = 5; // Add spacing between widgets
+        const startY = inputOutputHeight + globalToggleHeight + 10;
+        widget.y = startY + index * (LiteGraph.NODE_WIDGET_HEIGHT + widgetSpacing);
     }
 
     shouldIncludeGroup(group) {
@@ -167,22 +208,14 @@ export class GroupModeController extends BaseFastGroupsModeChanger {
     onDrawForeground(ctx) {
         const nodeWidth = this.size[0];
         const toggleHeight = 20;
-        this.drawGlobalToggle(ctx, this, nodeWidth, 4, toggleHeight);
-
-        const startY = toggleHeight + 5;
-
-        for (let i = 0; i < this.widgets.length; ++i) {
-            const w = this.widgets[i];
-            const y = startY + i * LiteGraph.NODE_WIDGET_HEIGHT + 4;
-            w.last_y = y;
-            if (w.draw) {
-                w.draw(ctx, this, w.last_y, w.last_y + LiteGraph.NODE_WIDGET_HEIGHT);
-            }
-        }
+        const inputOutputHeight = Math.max(this.inputs.length, this.outputs.length) * LiteGraph.NODE_SLOT_HEIGHT;
+        
+        // Draw global toggle below inputs and outputs
+        this.drawGlobalToggle(ctx, this, nodeWidth, inputOutputHeight + 5, toggleHeight);
     }
 
     drawGlobalToggle(ctx, node, width, posY, height) {
-        const margin = 10;
+        const margin = 15;
         const innerMargin = margin * 0.33;
         let posX = margin;
 
@@ -264,9 +297,10 @@ export class GroupModeController extends BaseFastGroupsModeChanger {
         if (pos[0] >= widget.navX - 28 && pos[0] <= widget.navX && pos[1] >= 0 && pos[1] <= height) {
             console.log(`Navigation arrow clicked for ${widget.label}`);
             const canvas = app.canvas;
-            const group = FAST_GROUPS_SERVICE.getGroups().find(g => g.title === widget.label);
-            if (group) {
-                this.centerAndZoomOnGroup(canvas, group);
+            if (widget.entity instanceof LGraphGroup) {
+                this.centerAndZoomOnGroup(canvas, widget.entity);
+            } else {
+                canvas.centerOnNode(widget.entity);
             }
             return true;
         }
@@ -286,6 +320,8 @@ export class GroupModeController extends BaseFastGroupsModeChanger {
     }
 
     onExecute() {
+        this.stabilizeInputsOutputs();
+        this.refreshWidgets();
         this.applyCurrentModesToAllGroups();
         this.triggerOutput();
     }
@@ -293,9 +329,10 @@ export class GroupModeController extends BaseFastGroupsModeChanger {
     applyCurrentModesToAllGroups() {
         if (this.globalToggle) {
             for (const widget of this.widgets) {
-                const group = FAST_GROUPS_SERVICE.getGroups().find(g => g.title === widget.label);
-                if (group) {
-                    this.applyModeToGroup(group, widget.value);
+                if (widget.entity instanceof LGraphGroup) {
+                    this.applyModeToGroup(widget.entity, widget.value);
+                } else {
+                    this.applyModeToNode(widget.entity, widget.value);
                 }
             }
         } else {
@@ -304,8 +341,17 @@ export class GroupModeController extends BaseFastGroupsModeChanger {
                     node.mode = LiteGraph.ALWAYS;
                 }
             }
+            const linkedNodes = getConnectedInputNodesAndFilterPassThroughs(this);
+            for (const node of linkedNodes) {
+                node.mode = LiteGraph.ALWAYS;
+            }
         }
         app.graph.setDirtyCanvas(true, false);
+
+        // If connected to a repeater, sync its mode
+        if (this.repeaterNode) {
+            this.repeaterNode.mode = this.globalToggle ? LiteGraph.ALWAYS : LiteGraph.NEVER;
+        }
     }
 
     applyModeToGroup(group, value) {
@@ -313,6 +359,10 @@ export class GroupModeController extends BaseFastGroupsModeChanger {
             node.mode = value.mute ? LiteGraph.NEVER : (value.bypass ? 4 : LiteGraph.ALWAYS);
         }
         app.graph.setDirtyCanvas(true, false);
+    }
+
+    applyModeToNode(node, value) {
+        node.mode = value.mute ? LiteGraph.NEVER : (value.bypass ? 4 : LiteGraph.ALWAYS);
     }
 
     triggerOutput() {
@@ -355,36 +405,108 @@ export class GroupModeController extends BaseFastGroupsModeChanger {
 
     computeSize(out) {
         const size = super.computeSize(out);
+        const widgetSpacing = 5; // Same spacing as in updateWidgetPosition
+        // Add extra height for the global toggle and widget spacing
+        size[1] += 25 + (this.widgets.length - 1) * widgetSpacing;
         return size;
     }
 
     onConnectionsChange(type, slotIndex, isConnected, link_info, input) {
-        console.log(`GroupModeController: onConnectionsChange called with:
-            type: ${type} (${type === LiteGraph.INPUT ? 'INPUT' : type === LiteGraph.OUTPUT ? 'OUTPUT' : 'UNKNOWN'})
-            slotIndex: ${slotIndex}
-            isConnected: ${isConnected}
-            link_info: ${JSON.stringify(link_info, null, 2)}
-            input: ${JSON.stringify(input, null, 2)}
-            Current controlledByMuter: ${this.controlledByMuter}
-        `);
+        console.log(`GroupModeController: onConnectionsChange called with type: ${type}, slotIndex: ${slotIndex}, isConnected: ${isConnected}, link_info: ${JSON.stringify(link_info)}, input: ${JSON.stringify(input)}`);
+        
+        if (type === LiteGraph.OUTPUT && slotIndex === 0) {
+            this.controlledByMuter = isConnected;
+        }
+
+        if (type === LiteGraph.INPUT) {
+            if (isConnected && link_info) {
+                console.log(`New connection made to input slot ${slotIndex}`);
+                if (link_info.origin_id) {
+                    const connectedNode = this.graph.getNodeById(link_info.origin_id);
+                    if (this.isNodeModeRepeater(connectedNode)) {
+                        this.repeaterNode = connectedNode;
+                        this.handleRepeaterConnection(connectedNode);
+                    }
+                }
+            } else {
+                console.log(`Connection removed from input slot ${slotIndex}`);
+                if (this.repeaterNode && link_info && link_info.origin_id === this.repeaterNode.id) {
+                    this.repeaterNode = null;
+                }
+            }
+            this.scheduleStabilizeWidgets();
+        }
 
         if (super.onConnectionsChange) {
             super.onConnectionsChange(type, slotIndex, isConnected, link_info, input);
         }
+    }
 
-        // 0 is slot index for OPT_CONNECTION
-        if (type === LiteGraph.OUTPUT && slotIndex === 0) {
-            this.controlledByMuter = isConnected;
-            console.log(`GroupModeController: Controlled by Muter updated to: ${this.controlledByMuter}`);
-            this.setDirtyCanvas(true, true);
-        } else {
-            console.log(`GroupModeController: Connection change did not affect Muter control.`);
+    scheduleStabilizeWidgets(ms = 100) {
+        if (!this.schedulePromise) {
+            this.schedulePromise = new Promise((resolve) => {
+                setTimeout(() => {
+                    this.schedulePromise = null;
+                    this.doStabilization();
+                    resolve();
+                }, ms);
+            });
         }
+        return this.schedulePromise;
+    }
+
+    doStabilization() {
+        if (!this.graph) {
+            return;
+        }
+        this.stabilizeInputsOutputs();
+        this.refreshWidgets();
+        app.graph.setDirtyCanvas(true, true);
+    }
+
+    // Implement methods from BaseAnyInputConnectedNode
+    stabilizeInputsOutputs() {
+        const hasEmptyInput = !this.inputs[this.inputs.length - 1]?.link;
+        if (!hasEmptyInput) {
+            this.addInput("", "*");
+        }
+        for (let index = this.inputs.length - 2; index >= 0; index--) {
+            const input = this.inputs[index];
+            if (!input.link) {
+                this.removeInput(index);
+            } else {
+                const node = getConnectedInputNodesAndFilterPassThroughs(this, this, index)[0];
+                input.name = node?.title || "";
+            }
+        }
+    }
+
+    isNodeModeRepeater(node) {
+        return node && typeof node === 'object' && node.type === NodeTypesString.NODE_MODE_REPEATER;
+    }
+
+    handleRepeaterConnection(repeaterNode) {
+        // Sync the initial state with the repeater
+        this.syncWithRepeater(repeaterNode);
+
+        // Add a listener for mode changes on the repeater
+        repeaterNode.onModeChange = (from, to) => {
+            this.syncWithRepeater(repeaterNode);
+        };
+    }
+
+    syncWithRepeater(repeaterNode) {
+        const newMode = repeaterNode.mode;
+        this.globalToggle = newMode !== LiteGraph.NEVER; // Mute is NEVER, so invert for our globalToggle
+        this.applyCurrentModesToAllGroups();
+        this.setDirtyCanvas(true, true);
     }
 }
 
 GroupModeController.type = NodeTypesString.GROUP_MODE_CONTROLLER;
 GroupModeController.title = NodeTypesString.GROUP_MODE_CONTROLLER;
+GroupModeController.category = "rgthree";
+GroupModeController._category = "rgthree";
 GroupModeController.exposedActions = ["Mute all", "Bypass all", "Clear all"];
 
 app.registerExtension({
