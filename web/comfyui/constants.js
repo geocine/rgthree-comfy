@@ -38,6 +38,7 @@ export const NodeTypesString = {
     BOOKMARK: addRgthree("Bookmark"),
     IMAGE_COMPARER: addRgthree("Image Comparer"),
     IMAGE_INSET_CROP: addRgthree("Image Inset Crop"),
+    GROUP_MODE_CONTROLLER: addRgthree("Group Mode Controller"),
 };
 export function getNodeTypeStrings() {
     return Object.values(NodeTypesString)
