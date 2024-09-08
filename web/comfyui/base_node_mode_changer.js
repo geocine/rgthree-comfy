@@ -46,33 +46,56 @@ export class BaseNodeModeChanger extends BaseAnyInputConnectedNode {
         return changed;
     }
     setWidget(widget, linkedNode, forceValue) {
-        let changed = false;
-        const value = forceValue == null ? linkedNode.mode === this.modeOn : forceValue;
-        let name = `Enable ${linkedNode.title}`;
-        if (widget.name !== name) {
-            widget.name = `Enable ${linkedNode.title}`;
-            widget.options = { on: "yes", off: "no" };
-            widget.value = value;
-            widget.doModeChange = (forceValue, skipOtherNodeCheck) => {
-                var _a, _b, _c;
-                let newValue = forceValue == null ? linkedNode.mode === this.modeOff : forceValue;
-                if (skipOtherNodeCheck !== true) {
-                    if (newValue && ((_b = (_a = this.properties) === null || _a === void 0 ? void 0 : _a["toggleRestriction"]) === null || _b === void 0 ? void 0 : _b.includes(" one"))) {
-                        for (const widget of this.widgets) {
-                            widget.doModeChange(false, true);
-                        }
-                    }
-                    else if (!newValue && ((_c = this.properties) === null || _c === void 0 ? void 0 : _c["toggleRestriction"]) === "always one") {
-                        newValue = this.widgets.every((w) => !w.value || w === widget);
+        let value;
+        if (linkedNode.constructor.name === "GroupModeController") {
+            value = linkedNode.globalToggle;
+        } else {
+            value = forceValue == null ? linkedNode.mode === this.modeOn : forceValue;
+        }
+
+        widget.name = `Enable ${linkedNode.title}`;
+        widget.options = { on: "yes", off: "no" };
+        widget.value = value;
+
+        widget.doModeChange = (forceValue, skipOtherNodeCheck) => {
+            let newValue;
+            if (linkedNode.constructor.name === "GroupModeController") {
+                newValue = forceValue == null ? !linkedNode.globalToggle : forceValue;
+            } else {
+                newValue = forceValue == null ? linkedNode.mode === this.modeOff : forceValue;
+            }
+
+            if (skipOtherNodeCheck !== true) {
+                if (newValue && this.properties?.["toggleRestriction"]?.includes(" one")) {
+                    for (const w of this.widgets) {
+                        w.doModeChange(false, true);
                     }
                 }
+                else if (!newValue && this.properties?.["toggleRestriction"] === "always one") {
+                    newValue = this.widgets.every((w) => !w.value || w === widget);
+                }
+            }
+
+            if (linkedNode.constructor.name === "GroupModeController") {
+                linkedNode.onAction("Toggle Global");
+                widget.value = linkedNode.globalToggle;
+            } else {
                 linkedNode.mode = (newValue ? this.modeOn : this.modeOff);
                 widget.value = newValue;
-            };
-            widget.callback = () => {
-                widget.doModeChange();
-            };
-            changed = true;
+            }
+        };
+
+        widget.callback = () => {
+            widget.doModeChange();
+        };
+
+        if (forceValue != null) {
+            if (linkedNode.constructor.name === "GroupModeController") {
+                linkedNode.onAction("Toggle Global");
+                widget.value = linkedNode.globalToggle;
+            } else {
+                linkedNode.mode = (forceValue ? this.modeOn : this.modeOff);
+            }
         }
         if (forceValue != null) {
             const newMode = (forceValue ? this.modeOn : this.modeOff);
