@@ -13,27 +13,31 @@ export class GroupModeController extends RgthreeBaseVirtualNode {
         this.comfyClass = NodeTypesString.GROUP_MODE_CONTROLLER;
         this.helpActions = "control mute and bypass";
         this.serialize_widgets = true;
-        this.globalToggle = true;
+        this.globalToggle = false;
         this.globalToggleBounds = null;
         this.controlledByMuter = false;
         this.inputNodes = [];
         this.schedulePromise = null;
         this.repeaterNode = null;
         this.isUpdating = false;
+        this.entitySettings = {}; // This will now be specific to this node instance
         this.onConstructed();
     }
 
     onConstructed() {
+        console.log("GroupModeController: onConstructed");
         this.addInput("", "*");
         this.addOutput("OPT_CONNECTION", "*");
         return super.onConstructed();
     }
 
     onAdded(graph) {
+        console.log("GroupModeController: onAdded");
         FAST_GROUPS_SERVICE.addFastGroupNode(this);
     }
 
     onRemoved() {
+        console.log("GroupModeController: onRemoved");
         FAST_GROUPS_SERVICE.removeFastGroupNode(this);
     }
 
@@ -46,13 +50,14 @@ export class GroupModeController extends RgthreeBaseVirtualNode {
         // Process groups
         for (const group of groups) {
             if (this.shouldIncludeGroup(group)) {
-                this.processEntity(group, index++);
+                this.processEntity(group, "group", index++);
             }
         }
 
         // Process linked nodes
         for (const node of linkedNodes) {
-            this.processEntity(node, index++);
+            console.log("GroupModeController: processEntity", node, index++);
+            this.processEntity(node, "node", index++);
         }
 
         this.widgets.splice(index);
@@ -66,17 +71,18 @@ export class GroupModeController extends RgthreeBaseVirtualNode {
         this.setDirtyCanvas(true, true);
     }
 
-    processEntity(entity, index) {
-        const widgetName = `Control ${entity.title || entity.name}`;
-        let widget = this.widgets.find((w) => w.name === widgetName);
+    processEntity(entity, type, index) {
+        let entityId = type === "group" ? entity.title : entity.id;
+        let settingsKey = `${this.id}_${entityId}`;
+        let widget = this.widgets.find((w) => w.settingsKey === settingsKey && w.type === type);
         if (!widget) {
-            widget = this.createEntityWidget(entity, index);
+            widget = this.createEntityWidget(entity, type, settingsKey, index);
         } else {
             this.updateWidgetPosition(widget, index);
         }
 
-        if (this.widgets[index] !== widget) {
-            const oldIndex = this.widgets.findIndex((w) => w === widget);
+        if (this.widgets[index]?.settingsKey !== widget.settingsKey) {
+            const oldIndex = this.widgets.findIndex((w) => w.settingsKey === widget.settingsKey);
             if (oldIndex !== -1) {
                 this.widgets.splice(oldIndex, 1);
             }
@@ -84,14 +90,18 @@ export class GroupModeController extends RgthreeBaseVirtualNode {
         }
     }
 
-    createEntityWidget(entity, index) {
+    createEntityWidget(entity, type, settingsKey, index) {
+        const savedSettings = this.entitySettings[settingsKey] || { mute: false, bypass: false };
+        
         const widget = this.addCustomWidget({
             name: `Control ${entity.title || entity.name}`,
             label: entity.title || entity.name,
-            value: { mute: false, bypass: false },
+            value: { ...savedSettings },
             draw: (ctx, node, width, posY, height) => this.drawDoubleToggle(ctx, node, width, posY, height),
             mouse: (event, pos, node) => this.handleMouseEvent(event, pos, node),
-            entity: entity
+            entity: entity,
+            settingsKey: settingsKey, // Store the compound key in the widget
+            type: type
         });
         this.updateWidgetPosition(widget, index);
         return widget;
@@ -242,6 +252,7 @@ export class GroupModeController extends RgthreeBaseVirtualNode {
     }
 
     onMouseDown(event, pos, graphcanvas) {
+        console.log("GroupModeController: onMouseDown", event, pos, graphcanvas);
         if (this.controlledByMuter) {
             return false; // Disable interaction if controlled by a Muter
         }
@@ -259,6 +270,7 @@ export class GroupModeController extends RgthreeBaseVirtualNode {
     }
 
     handleMouseEvent(event, pos, node) {
+        console.log("GroupModeController: handleMouseEvent", event, pos, node);
         if (event.type === "pointerdown") {
             const height = node.size[1];
             const toggleWidth = 13;
@@ -285,25 +297,42 @@ export class GroupModeController extends RgthreeBaseVirtualNode {
     }
 
     handleToggleClick(pos, widget, toggleX, toggleWidth, toggleType) {
+        console.log("GroupModeController: handleToggleClick", pos, widget, toggleX, toggleWidth, toggleType);
         if (pos[0] >= toggleX - toggleWidth && pos[0] <= toggleX + toggleWidth) {
-            widget.value[toggleType] = !widget.value[toggleType];
-            widget.value[toggleType === 'mute' ? 'bypass' : 'mute'] = false;
-            console.log(`${toggleType} toggle clicked. New state: M${widget.value.mute ? 1 : 0} B${widget.value.bypass ? 1 : 0}`);
+            // Update the settings
+            const currentSettings = this.entitySettings[widget.settingsKey] || { mute: false, bypass: false };
+            currentSettings[toggleType] = !currentSettings[toggleType];
+            currentSettings[toggleType === 'mute' ? 'bypass' : 'mute'] = false;
             
-            // Update repeater if it exists and this widget corresponds to it
-            if (this.repeaterNode && !this.repeaterNode.isUpdating && widget.entity === this.repeaterNode) {
-                const newMode = widget.value.mute ? LiteGraph.NEVER : 
-                               (widget.value.bypass ? 4 : LiteGraph.ALWAYS);
-                this.repeaterNode.mode = newMode;
-                this.repeaterNode.onModeChange(this.repeaterNode.mode, newMode);
+            // Save the updated settings
+            this.entitySettings[widget.settingsKey] = { ...currentSettings };
+
+            widget.value = { ...currentSettings };
+            
+            this.applySettingsToEntity(widget, currentSettings);
+
+            // Only apply changes if global toggle is on
+            if (this.globalToggle) {
+                this.applyCurrentModesToAllGroups();
             }
-            
+            this.setDirtyCanvas(true, true);
             return true;
         }
         return false;
     }
 
+    applySettingsToEntity(widget, settings) {
+        console.log("GroupModeController: applySettingsToEntity", widget, settings);
+        const entity = widget.entity;
+        if (entity instanceof LGraphGroup) {
+            this.applyModeToGroup(widget, settings);
+        } else {
+            this.applyModeToNode(widget, settings);
+        }
+    }
+
     handleNavClick(pos, widget, height) {
+        console.log("GroupModeController: handleNavClick", pos, widget, height);
         if (pos[0] >= widget.navX - 28 && pos[0] <= widget.navX && pos[1] >= 0 && pos[1] <= height) {
             console.log(`Navigation arrow clicked for ${widget.label}`);
             const canvas = app.canvas;
@@ -342,13 +371,18 @@ export class GroupModeController extends RgthreeBaseVirtualNode {
 
         if (this.globalToggle) {
             for (const widget of this.widgets) {
-                if (widget.entity instanceof LGraphGroup) {
-                    this.applyModeToGroup(widget.entity, widget.value);
+                const entity = widget.entity;
+                const settingsKey = widget.settingsKey;
+                const savedSettings = this.entitySettings[settingsKey] || { mute: false, bypass: false };
+
+                if (entity instanceof LGraphGroup) {
+                    this.applyModeToGroup(widget, savedSettings);
                 } else {
-                    this.applyModeToNode(widget.entity, widget.value);
+                    this.applyModeToNode(widget, savedSettings);
                 }
             }
         } else {
+            // When global toggle is off, set all nodes to ALWAYS
             for (const group of FAST_GROUPS_SERVICE.getGroups()) {
                 for (const node of group._nodes) {
                     node.mode = LiteGraph.ALWAYS;
@@ -359,36 +393,45 @@ export class GroupModeController extends RgthreeBaseVirtualNode {
                 node.mode = LiteGraph.ALWAYS;
             }
         }
+
+        this.setDirtyCanvas(true, true);
         app.graph.setDirtyCanvas(true, false);
 
-        // Update connected NodeModeRepeater
+        // Update repeater node if necessary
         if (this.repeaterNode && !this.repeaterNode.isUpdating) {
-            if (this.globalToggle) {
-                const repeaterWidget = this.widgets.find(w => w.entity === this.repeaterNode);
-                if (repeaterWidget) {
-                    const newMode = repeaterWidget.value.mute ? LiteGraph.NEVER : 
-                                    (repeaterWidget.value.bypass ? 4 : LiteGraph.ALWAYS);
-                    this.repeaterNode.mode = newMode;
-                    this.repeaterNode.onModeChange(this.repeaterNode.mode, newMode);
-                }
-            } else {
-                // Set repeater to ALWAYS when global toggle is off
-                this.repeaterNode.mode = LiteGraph.ALWAYS;
-                this.repeaterNode.onModeChange(this.repeaterNode.mode, LiteGraph.ALWAYS);
+            const repeaterWidget = this.widgets.find(w => w.entity === this.repeaterNode);
+            if (repeaterWidget) {
+                const savedSettings = this.entitySettings[repeaterWidget.settingsKey] || { mute: false, bypass: false };
+                const newMode = this.globalToggle ? 
+                    (savedSettings.mute ? LiteGraph.NEVER : (savedSettings.bypass ? 4 : LiteGraph.ALWAYS)) :
+                    LiteGraph.ALWAYS;
+                this.repeaterNode.mode = newMode;
+                this.repeaterNode.onModeChange(this.repeaterNode.mode, newMode);
             }
         }
 
         this.isUpdating = false;
     }
 
-    applyModeToGroup(group, value) {
+    applyModeToGroup(widget, value) {
+        const group = widget.entity;
         for (const node of group._nodes) {
-            node.mode = value.mute ? LiteGraph.NEVER : (value.bypass ? 4 : LiteGraph.ALWAYS);
+            // Check if this node is individually controlled by this GroupModeController
+            const nodeWidget = this.widgets.find(w => w.entity === node);
+            if (nodeWidget) {
+                // If the node is individually controlled, use its own settings
+                const nodeSettings = this.entitySettings[nodeWidget.settingsKey] || { mute: false, bypass: false };
+                node.mode = nodeSettings.mute ? LiteGraph.NEVER : (nodeSettings.bypass ? 4 : LiteGraph.ALWAYS);
+            } else {
+                // If the node is not individually controlled, apply the group settings
+                node.mode = value.mute ? LiteGraph.NEVER : (value.bypass ? 4 : LiteGraph.ALWAYS);
+            }
         }
         app.graph.setDirtyCanvas(true, false);
     }
 
-    applyModeToNode(node, value) {
+    applyModeToNode(widget, value) {
+        const node = widget.entity;
         node.mode = value.mute ? LiteGraph.NEVER : (value.bypass ? 4 : LiteGraph.ALWAYS);
     }
 
@@ -428,13 +471,16 @@ export class GroupModeController extends RgthreeBaseVirtualNode {
             info.outputs.length = 1;
         }
         super.configure(info);
+        if (info.entitySettings) {
+            this.entitySettings = info.entitySettings;
+        }
     }
 
     computeSize(out) {
         const size = super.computeSize(out);
         const widgetSpacing = 5; // Same spacing as in updateWidgetPosition
         // Add extra height for the global toggle and widget spacing
-        size[1] += 2 + (this.widgets.length - 1) * widgetSpacing;
+        size[1] += 20 + (this.widgets.length - 1) * widgetSpacing;
         return size;
     }
 
@@ -511,6 +557,24 @@ export class GroupModeController extends RgthreeBaseVirtualNode {
 
     isNodeModeRepeater(node) {
         return node && typeof node === 'object' && node.type === NodeTypesString.NODE_MODE_REPEATER;
+    }
+
+    // Override the serialize method to include entitySettings
+    serialize() {
+        const obj = super.serialize();
+        obj.entitySettings = this.entitySettings;
+        return obj;
+    }
+
+    onExternalModeChange(entity, mode) {
+        const widget = this.widgets.find(w => w.entity === entity);
+        if (widget) {
+            const currentSettings = this.entitySettings[widget.settingsKey] || { mute: false, bypass: false };
+            currentSettings.mute = mode === 'mute';
+            currentSettings.bypass = false;
+            this.entitySettings[widget.settingsKey] = { ...currentSettings };
+            this.setDirtyCanvas(true, true);
+        }
     }
 }
 
