@@ -20,11 +20,10 @@ export class GroupModeController extends RgthreeBaseVirtualNode {
         this.schedulePromise = null;
         this.repeaterNode = null;
         this.isUpdating = false;
-        this.entitySettings = {}; // Deprecated, replaced by groupSettings and nodeSettings
         this.groupWidgets = [];
         this.nodeWidgets = [];
-        this.groupSettings = {}; // New: Stores settings for groups
-        this.nodeSettings = {};  // New: Stores settings for nodes
+        this.groupSettings = {}; // Stores settings for groups
+        this.nodeSettings = {};  // Stores settings for nodes
         this.onConstructed();
     }
 
@@ -269,12 +268,14 @@ export class GroupModeController extends RgthreeBaseVirtualNode {
     }
 
     onDrawForeground(ctx) {
-        const nodeWidth = this.size[0];
-        const toggleHeight = 20;
-        const inputOutputHeight = Math.max(this.inputs.length, this.outputs.length) * LiteGraph.NODE_SLOT_HEIGHT;
-        
-        // Draw global toggle below inputs and outputs
-        this.drawGlobalToggle(ctx, this, nodeWidth, inputOutputHeight + 5, toggleHeight);
+        if (!this.flags.collapsed) { // Check if the node is not collapsed
+            const nodeWidth = this.size[0];
+            const toggleHeight = 20;
+            const inputOutputHeight = Math.max(this.inputs.length, this.outputs.length) * LiteGraph.NODE_SLOT_HEIGHT;
+            
+            // Draw global toggle below inputs and outputs
+            this.drawGlobalToggle(ctx, this, nodeWidth, inputOutputHeight + 5, toggleHeight);
+        }
     }
 
     drawGlobalToggle(ctx, node, width, posY, height) {
@@ -542,8 +543,11 @@ export class GroupModeController extends RgthreeBaseVirtualNode {
     computeSize(out) {
         const size = super.computeSize(out);
         const widgetSpacing = 5; // Same spacing as in updateWidgetPosition
-        // Add extra height for the global toggle and widget spacing
-        size[1] += 20 + (this.widgets.length - 1) * widgetSpacing;
+
+        // Add extra height for the global toggle and widget spacing only if not collapsed
+        if (!this.flags.collapsed) {
+            size[1] += 20 + (this.widgets.length - 1) * widgetSpacing;
+        }
         return size;
     }
 
