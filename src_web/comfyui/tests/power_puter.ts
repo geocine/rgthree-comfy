@@ -129,7 +129,7 @@ describe("TestPowerPuter", async () => {
   });
 
   await should("handle boolean operators correctly", async () => {
-    const checks: Array<[string, string, string, ('toMatchJson'|'toBe')?]> = [
+    const checks: Array<[string, string, string, ("toMatchJson" | "toBe")?]> = [
       // And operator all success
       ["1 and 42", "42", "STRING"],
       ["True and [42]", "[42]", "STRING", "toMatchJson"],
@@ -151,12 +151,58 @@ describe("TestPowerPuter", async () => {
       ["1 and 2 and 0 or 5", "5", "STRING"],
       ["None and 1 or True", "True", "STRING"],
       ["0 or False and True", "False", "STRING"],
-
     ];
     for (const data of checks) {
       setPowerPuterValue(powerPuter, data[2], data[0]);
       await env.queuePrompt();
-      expect(displayAny.widgets![0]!.value)[data[3] || 'toBe'](data[0], data[1]);
+      expect(displayAny.widgets![0]!.value)[data[3] || "toBe"](data[0], data[1]);
     }
+  });
+
+  await should("use strftime correctly", async () => {
+    const imageNode = await pasteImageToLoadImageNode(env);
+    imageNode.connect(0, powerPuter, 0);
+    setPowerPuterValue(
+      powerPuter,
+      "STRING",
+      `strftime("%A, %d. %B %Y %I:%M%p")
+      `,
+    );
+    await env.queuePrompt();
+    expect(displayAny.widgets![0]!.value).toMatch(
+      /^[A-Z][a-z]+?day, \d+. [A-Z][a-z]+? 20\d\d \d\d:\d\d[AP]M$/,
+    );
+  });
+
+  await should("now and strftime correctly", async () => {
+    const imageNode = await pasteImageToLoadImageNode(env);
+    imageNode.connect(0, powerPuter, 0);
+    setPowerPuterValue(
+      powerPuter,
+      "STRING",
+      `
+       d = now()
+       d.strftime("%A, %d. %B %Y %I:%M%p")
+      `,
+    );
+    await env.queuePrompt();
+    expect(displayAny.widgets![0]!.value).toMatch(
+      /^[A-Z][a-z]+?day, \d+. [A-Z][a-z]+? 20\d\d \d\d:\d\d[AP]M$/,
+    );
+  });
+
+  await should("use datetime directly", async () => {
+    const imageNode = await pasteImageToLoadImageNode(env);
+    imageNode.connect(0, powerPuter, 0);
+    setPowerPuterValue(
+      powerPuter,
+      "STRING",
+      `
+       d = datetime.datetime.strptime("2025-10-31 23:59", "%Y-%m-%d %H:%M")
+       d.strftime("%A, %d. %B %Y %I:%M%p")
+      `,
+    );
+    await env.queuePrompt();
+    expect(displayAny.widgets![0]!.value).toBe("Friday, 31. October 2025 11:59PM");
   });
 });

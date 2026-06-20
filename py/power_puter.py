@@ -109,10 +109,12 @@ def _get_built_in_fn_by_key(fn_key: str):
     raise ValueError('No built in function found.')
   return _BUILT_INS_BY_NAME_AND_KEY[fn_key]
 
+
 def sha264(message: str):
   if isinstance(message, str):
     return hashlib.sha256(message.encode()).hexdigest()
   return None
+
 
 _BUILT_IN_FNS_LIST = [
   Function(name="round", call=round, args=(1, 2)),
@@ -128,6 +130,9 @@ _BUILT_IN_FNS_LIST = [
   Function(name="len", call=len, args=(1, 1)),
   Function(name="enumerate", call=enumerate, args=(1, 1)),
   Function(name="range", call=range, args=(1, 3)),
+  # Dates / Time
+  Function(name="now", call=datetime.datetime.now, args=(0, 1)),
+  Function(name="strftime", call=lambda f: datetime.datetime.now().strftime(f), args=(0, 1)),
   # Casts
   Function(name="int", call=int, args=(1, 1)),
   Function(name="float", call=float, args=(1, 1)),
@@ -162,6 +167,8 @@ _BUILT_INS = MappingProxyType(
         'choice': _get_built_in_fn_key(_BUILT_INS_BY_NAME_AND_KEY['.random_choice']),
         'seed': _get_built_in_fn_key(_BUILT_INS_BY_NAME_AND_KEY['.random_seed']),
       }),
+    # Access all of datetime import.
+    'datetime': datetime,
   }
 )
 
@@ -223,7 +230,6 @@ _OPERATORS = {
   ast.IsNot: op.is_not,
   ast.In: lambda a, b: a in b,
   ast.NotIn: lambda a, b: a not in b,
-
 }
 
 _NODE_NAME = get_name("Power Puter")
